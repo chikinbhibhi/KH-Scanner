@@ -1,30 +1,759 @@
-import { Text, View, StyleSheet, Image } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  Vibration,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useAudioPlayer } from "expo-audio";
+import { Ionicons } from "@expo/vector-icons";
 
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+import { parseQR } from "../src/utils/parseQR";
+import {
+  addScan,
+  clearScans,
+  deleteScan,
+  loadScans,
+  ScanItem,
+} from "../src/utils/storage";
 
-export default function Index() {
-  console.log(EXPO_PUBLIC_BACKEND_URL, "EXPO_PUBLIC_BACKEND_URL");
+const COLORS = {
+  bg: "#FFFFFF",
+  surface: "#F4F4F5",
+  surface2: "#E4E4E7",
+  ink: "#09090B",
+  mute: "#52525B",
+  accent: "#FF3B30",
+  ok: "#10B981",
+};
+
+const fmt = (n: number) =>
+  n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+const fmtTime = (t: number) => {
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(
+    d.getMinutes()
+  ).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+};
+
+type ScanState = "idle" | "ok" | "error";
+
+export default function ScannerScreen() {
+  const [scans, setScans] = useState<ScanItem[]>([]);
+  const [buffer, setBuffer] = useState("");
+  const [status, setStatus] = useState<ScanState>("idle");
+  const [statusMsg, setStatusMsg] = useState("SCANNER READY — WAITING FOR DATA");
+  const [manualOpen, setManualOpen] = useState(false);
+  const [mName, setMName] = useState("");
+  const [mNetto, setMNetto] = useState("");
+  const [mBrutto, setMBrutto] = useState("");
+  const inputRef = useRef<TextInput | null>(null);
+  const statusTimer = useRef<any>(null);
+
+  const successPlayer = useAudioPlayer(require("../assets/sounds/success.wav"));
+  const errorPlayer = useAudioPlayer(require("../assets/sounds/error.wav"));
+
+  useEffect(() => {
+    loadScans().then(setScans);
+    return () => {
+      if (statusTimer.current) clearTimeout(statusTimer.current);
+    };
+  }, []);
+
+  const playSuccess = () => {
+    try {
+      successPlayer.seekTo(0);
+      successPlayer.play();
+    } catch {}
+  };
+  const playError = () => {
+    try {
+      errorPlayer.seekTo(0);
+      errorPlayer.play();
+    } catch {}
+  };
+
+  const flashStatus = (s: ScanState, msg: string) => {
+    setStatus(s);
+    setStatusMsg(msg);
+    if (statusTimer.current) clearTimeout(statusTimer.current);
+    statusTimer.current = setTimeout(() => {
+      setStatus("idle");
+      setStatusMsg("SCANNER READY — WAITING FOR DATA");
+    }, 2500);
+  };
+
+  const processScan = async (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const parsed = parseQR(trimmed);
+    if (!parsed) {
+      playError();
+      Vibration.vibrate(300);
+      flashStatus(
+        "error",
+        `INVALID SCAN: "${trimmed.substring(0, 40)}${trimmed.length > 40 ? "..." : ""}"`
+      );
+      return;
+    }
+    const item: ScanItem = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: parsed.name,
+      netto: parsed.netto,
+      brutto: parsed.brutto,
+      scannedAt: Date.now(),
+    };
+    playSuccess();
+    Vibration.vibrate(50);
+    const next = await addScan(item);
+    setScans(next);
+    flashStatus(
+      "ok",
+      `ADDED: ${item.name ?? "ITEM"} — N ${fmt(item.netto)}g / B ${fmt(
+        item.brutto
+      )}g`
+    );
+  };
+
+  const onSubmitEditing = async () => {
+    const val = buffer;
+    setBuffer("");
+    await processScan(val);
+    // Keep input focused for next scan
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const submitManual = async () => {
+    const n = parseFloat(mNetto.replace(",", "."));
+    const b = parseFloat(mBrutto.replace(",", "."));
+    if (!Number.isFinite(n) || !Number.isFinite(b)) {
+      Alert.alert("INVALID INPUT", "Enter valid Netto and Brutto numbers.");
+      return;
+    }
+    const item: ScanItem = {
+      id: `${Date.now()}-m${Math.random().toString(36).slice(2, 6)}`,
+      name: mName.trim() || undefined,
+      netto: n,
+      brutto: b,
+      scannedAt: Date.now(),
+    };
+    playSuccess();
+    const next = await addScan(item);
+    setScans(next);
+    flashStatus(
+      "ok",
+      `ADDED: ${item.name ?? "ITEM"} — N ${fmt(n)}g / B ${fmt(b)}g`
+    );
+    setMName("");
+    setMNetto("");
+    setMBrutto("");
+    setManualOpen(false);
+    setTimeout(() => inputRef.current?.focus(), 100);
+  };
+
+  const handleDelete = useCallback((id: string, name?: string) => {
+    Alert.alert(
+      "DELETE ITEM?",
+      `Remove ${name ?? "this item"} from the list?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const next = await deleteScan(id);
+            setScans(next);
+            flashStatus("ok", "ITEM DELETED");
+            setTimeout(() => inputRef.current?.focus(), 100);
+          },
+        },
+      ]
+    );
+  }, []);
+
+  const handleClearAll = () => {
+    if (scans.length === 0) return;
+    Alert.alert(
+      "CLEAR ALL SCANS?",
+      `This will delete all ${scans.length} items.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            await clearScans();
+            setScans([]);
+            flashStatus("ok", "CLEARED ALL");
+            setTimeout(() => inputRef.current?.focus(), 100);
+          },
+        },
+      ]
+    );
+  };
+
+  const totalNetto = scans.reduce((s, x) => s + x.netto, 0);
+  const totalBrutto = scans.reduce((s, x) => s + x.brutto, 0);
+
+  const renderItem = ({ item, index }: { item: ScanItem; index: number }) => (
+    <View style={styles.row} testID={`scan-row-${index}`}>
+      <View style={styles.rowIndex}>
+        <Text style={styles.rowIndexText}>
+          {String(scans.length - index).padStart(2, "0")}
+        </Text>
+      </View>
+      <View style={styles.rowInfo}>
+        <Text style={styles.rowName} numberOfLines={1}>
+          {item.name ?? `ITEM ${scans.length - index}`}
+        </Text>
+        <Text style={styles.rowTime}>{fmtTime(item.scannedAt)}</Text>
+      </View>
+      <View style={styles.rowVals}>
+        <View style={styles.rowValBlock}>
+          <Text style={styles.rowValLabel}>N</Text>
+          <Text style={styles.rowVal}>{fmt(item.netto)}</Text>
+        </View>
+        <View style={styles.rowValBlock}>
+          <Text style={styles.rowValLabel}>B</Text>
+          <Text style={styles.rowVal}>{fmt(item.brutto)}</Text>
+        </View>
+      </View>
+      <Pressable
+        onPress={() => handleDelete(item.id, item.name)}
+        style={styles.delBtn}
+        testID={`delete-${index}`}
+      >
+        <Ionicons name="close" size={20} color="#FFF" />
+      </Pressable>
+    </View>
+  );
+
+  const statusStyle =
+    status === "ok"
+      ? { bg: COLORS.ok, fg: "#FFF", dot: "#FFF" }
+      : status === "error"
+      ? { bg: COLORS.accent, fg: "#FFF", dot: "#FFF" }
+      : { bg: COLORS.surface2, fg: COLORS.ink, dot: COLORS.ink };
 
   return (
-    <View style={styles.container}>
-      <Image
-        source={require("../assets/images/app-image.png")}
-        style={styles.image}
+    <SafeAreaView style={styles.root} edges={["top", "left", "right"]}>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.label}>BLUETOOTH QR / WEIGHT</Text>
+          <Text style={styles.title} testID="app-title">
+            SCANNER
+          </Text>
+        </View>
+        <Pressable
+          testID="clear-all-btn"
+          onPress={handleClearAll}
+          style={[styles.iconBtn, scans.length === 0 && styles.iconBtnDisabled]}
+        >
+          <Ionicons name="trash-outline" size={22} color="#FFF" />
+        </Pressable>
+      </View>
+
+      {/* Status bar + hidden/visible scanner input */}
+      <Pressable
+        onPress={() => inputRef.current?.focus()}
+        style={[styles.statusBar, { backgroundColor: statusStyle.bg }]}
+        testID="status-bar"
+      >
+        <View
+          style={[
+            styles.statusDot,
+            { backgroundColor: statusStyle.dot, opacity: status === "idle" ? 0.5 : 1 },
+          ]}
+        />
+        <Text
+          style={[styles.statusText, { color: statusStyle.fg }]}
+          numberOfLines={1}
+        >
+          {statusMsg}
+        </Text>
+      </Pressable>
+
+      {/* The scanner target input — invisible but focused, receives Bluetooth HID input */}
+      <TextInput
+        ref={inputRef}
+        testID="scanner-input"
+        value={buffer}
+        onChangeText={setBuffer}
+        onSubmitEditing={onSubmitEditing}
+        blurOnSubmit={false}
+        autoFocus
+        showSoftInputOnFocus={false}
+        autoCorrect={false}
+        autoCapitalize="none"
+        style={styles.hiddenInput}
+        placeholder=""
       />
-    </View>
+
+      {/* Totals */}
+      <View style={styles.metrics}>
+        <View style={styles.metricRow}>
+          <View style={styles.metricCard} testID="metric-netto">
+            <Text style={styles.metricLabel}>TOTAL NETTO</Text>
+            <View style={styles.metricValueRow}>
+              <Text style={styles.metricValue}>{fmt(totalNetto)}</Text>
+              <Text style={styles.metricUnit}>g</Text>
+            </View>
+          </View>
+          <View style={styles.metricCard} testID="metric-brutto">
+            <Text style={styles.metricLabel}>TOTAL BRUTTO</Text>
+            <View style={styles.metricValueRow}>
+              <Text style={styles.metricValue}>{fmt(totalBrutto)}</Text>
+              <Text style={styles.metricUnit}>g</Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles.metricCardHighlight} testID="metric-count">
+          <Text style={styles.metricLabelLight}>ITEMS SCANNED</Text>
+          <Text style={styles.metricValueLight}>{scans.length}</Text>
+        </View>
+      </View>
+
+      {/* List */}
+      <View style={styles.listWrap}>
+        <View style={styles.listHeader}>
+          <Text style={styles.listTitle}>SCANNED ITEMS</Text>
+          <Text style={styles.listCount}>{scans.length}</Text>
+        </View>
+        {scans.length === 0 ? (
+          <View style={styles.empty} testID="empty-state">
+            <Ionicons name="scan-outline" size={48} color={COLORS.mute} />
+            <Text style={styles.emptyTitle}>NO ITEMS YET</Text>
+            <Text style={styles.emptySub}>
+              TRIGGER YOUR BLUETOOTH SCANNER TO ADD ITEMS
+            </Text>
+          </View>
+        ) : (
+          <FlatList
+            data={scans}
+            keyExtractor={(x) => x.id}
+            renderItem={renderItem}
+            contentContainerStyle={styles.listContent}
+            ItemSeparatorComponent={() => <View style={styles.sep} />}
+            testID="scan-list"
+            keyboardShouldPersistTaps="always"
+          />
+        )}
+      </View>
+
+      {/* Actions */}
+      <View style={styles.actions}>
+        <Pressable
+          testID="manual-add-btn"
+          onPress={() => setManualOpen(true)}
+          style={styles.primaryBtn}
+        >
+          <Ionicons name="keypad-outline" size={18} color="#FFF" />
+          <Text style={styles.primaryBtnText}>MANUAL ENTRY</Text>
+        </Pressable>
+      </View>
+
+      {/* Manual Modal */}
+      <Modal
+        visible={manualOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setManualOpen(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalRoot}
+        >
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() => {
+              setManualOpen(false);
+              setTimeout(() => inputRef.current?.focus(), 100);
+            }}
+          />
+          <View style={styles.modalSheet} testID="manual-entry-modal">
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>MANUAL ENTRY</Text>
+              <Pressable
+                onPress={() => {
+                  setManualOpen(false);
+                  setTimeout(() => inputRef.current?.focus(), 100);
+                }}
+                testID="manual-close-btn"
+              >
+                <Ionicons name="close" size={26} color={COLORS.ink} />
+              </Pressable>
+            </View>
+
+            <Text style={styles.inputLabel}>ITEM NAME (OPTIONAL)</Text>
+            <TextInput
+              testID="manual-name-input"
+              value={mName}
+              onChangeText={setMName}
+              placeholder="Item 1"
+              placeholderTextColor={COLORS.mute}
+              style={styles.input}
+            />
+
+            <View style={styles.rowGap}>
+              <View style={styles.col}>
+                <Text style={styles.inputLabel}>NETTO (g)</Text>
+                <TextInput
+                  testID="manual-netto-input"
+                  value={mNetto}
+                  onChangeText={setMNetto}
+                  placeholder="0.00"
+                  placeholderTextColor={COLORS.mute}
+                  keyboardType="decimal-pad"
+                  style={styles.input}
+                />
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.inputLabel}>BRUTTO (g)</Text>
+                <TextInput
+                  testID="manual-brutto-input"
+                  value={mBrutto}
+                  onChangeText={setMBrutto}
+                  placeholder="0.00"
+                  placeholderTextColor={COLORS.mute}
+                  keyboardType="decimal-pad"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+
+            <Pressable
+              testID="manual-submit-btn"
+              onPress={submitManual}
+              style={[styles.primaryBtn, { marginTop: 16 }]}
+            >
+              <Text style={styles.primaryBtnText}>ADD ITEM</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
+const monoFont = Platform.select({ ios: "Menlo", android: "monospace" });
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0c0c0c",
+  root: { flex: 1, backgroundColor: COLORS.bg },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 10,
+  },
+  label: {
+    fontSize: 10,
+    letterSpacing: 3,
+    color: COLORS.mute,
+    fontWeight: "700",
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: "900",
+    color: COLORS.ink,
+    letterSpacing: -1,
+    marginTop: 2,
+  },
+  iconBtn: {
+    width: 48,
+    height: 48,
+    backgroundColor: COLORS.ink,
     alignItems: "center",
     justifyContent: "center",
   },
-  image: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "contain",
+  iconBtnDisabled: { opacity: 0.3 },
+
+  statusBar: {
+    marginHorizontal: 20,
+    borderWidth: 2,
+    borderColor: COLORS.ink,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  statusText: {
+    fontWeight: "800",
+    fontSize: 12,
+    letterSpacing: 1.2,
+    flex: 1,
+  },
+
+  hiddenInput: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    opacity: 0,
+    left: -1000,
+    top: -1000,
+  },
+
+  metrics: {
+    paddingHorizontal: 20,
+    marginTop: 12,
+    gap: 8,
+  },
+  metricRow: { flexDirection: "row", gap: 8 },
+  metricCard: {
+    flex: 1,
+    borderWidth: 2,
+    borderColor: COLORS.ink,
+    backgroundColor: COLORS.bg,
+    padding: 12,
+  },
+  metricCardHighlight: {
+    borderWidth: 2,
+    borderColor: COLORS.ink,
+    backgroundColor: COLORS.ink,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  metricLabel: {
+    fontSize: 10,
+    letterSpacing: 2.5,
+    color: COLORS.mute,
+    fontWeight: "800",
+    marginBottom: 6,
+  },
+  metricLabelLight: {
+    fontSize: 10,
+    letterSpacing: 2.5,
+    color: "#FFF",
+    fontWeight: "800",
+    opacity: 0.7,
+  },
+  metricValueRow: { flexDirection: "row", alignItems: "baseline", gap: 4 },
+  metricValue: {
+    fontSize: 22,
+    fontWeight: "900",
+    color: COLORS.ink,
+    letterSpacing: -1,
+    fontFamily: monoFont,
+  },
+  metricValueLight: {
+    fontSize: 32,
+    fontWeight: "900",
+    color: "#FFF",
+    letterSpacing: -1,
+    fontFamily: monoFont,
+  },
+  metricUnit: {
+    fontSize: 12,
+    color: COLORS.mute,
+    fontWeight: "700",
+  },
+
+  listWrap: {
+    flex: 1,
+    marginTop: 16,
+    paddingHorizontal: 20,
+  },
+  listHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    marginBottom: 10,
+  },
+  listTitle: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: COLORS.ink,
+    letterSpacing: 2.5,
+  },
+  listCount: {
+    fontSize: 12,
+    color: COLORS.mute,
+    fontWeight: "800",
+    fontFamily: monoFont,
+  },
+  listContent: { paddingBottom: 20 },
+  sep: { height: 6 },
+  row: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    borderWidth: 2,
+    borderColor: COLORS.ink,
+    backgroundColor: COLORS.bg,
+    minHeight: 56,
+  },
+  rowIndex: {
+    width: 40,
+    backgroundColor: COLORS.ink,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rowIndexText: {
+    color: "#FFF",
+    fontWeight: "900",
+    fontSize: 13,
+    fontFamily: monoFont,
+  },
+  rowInfo: {
+    flex: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    justifyContent: "center",
+  },
+  rowName: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.ink,
+    letterSpacing: -0.2,
+  },
+  rowTime: {
+    fontSize: 10,
+    color: COLORS.mute,
+    marginTop: 2,
+    letterSpacing: 1,
+    fontFamily: monoFont,
+  },
+  rowVals: {
+    flexDirection: "row",
+    gap: 6,
+    paddingRight: 6,
+    alignItems: "center",
+  },
+  rowValBlock: {
+    alignItems: "flex-end",
+    minWidth: 56,
+  },
+  rowValLabel: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: COLORS.mute,
+    letterSpacing: 1.5,
+  },
+  rowVal: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: COLORS.ink,
+    fontFamily: monoFont,
+  },
+  delBtn: {
+    width: 44,
+    backgroundColor: COLORS.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  empty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 30,
+    gap: 6,
+    borderWidth: 2,
+    borderColor: COLORS.surface2,
+    borderStyle: "dashed",
+  },
+  emptyTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.ink,
+    letterSpacing: 2,
+    marginTop: 8,
+  },
+  emptySub: {
+    fontSize: 11,
+    color: COLORS.mute,
+    letterSpacing: 1.5,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+
+  actions: {
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 18,
+  },
+  primaryBtn: {
+    flex: 1,
+    height: 56,
+    backgroundColor: COLORS.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  primaryBtnText: {
+    color: "#FFF",
+    fontWeight: "900",
+    letterSpacing: 2,
+    fontSize: 13,
+  },
+
+  // Modal
+  modalRoot: { flex: 1, justifyContent: "flex-end" },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  modalSheet: {
+    backgroundColor: COLORS.bg,
+    borderTopWidth: 3,
+    borderColor: COLORS.ink,
+    padding: 20,
+    paddingBottom: 36,
+    gap: 10,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: COLORS.ink,
+    letterSpacing: -0.5,
+  },
+  inputLabel: {
+    fontSize: 10,
+    letterSpacing: 2.5,
+    color: COLORS.mute,
+    fontWeight: "800",
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  input: {
+    borderWidth: 2,
+    borderColor: COLORS.ink,
+    padding: 14,
+    fontSize: 16,
+    color: COLORS.ink,
+    backgroundColor: COLORS.bg,
+    fontFamily: monoFont,
+  },
+  rowGap: { flexDirection: "row", gap: 10 },
+  col: { flex: 1 },
 });
