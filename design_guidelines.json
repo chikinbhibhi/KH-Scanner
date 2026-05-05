@@ -1,0 +1,80 @@
+{
+  "theme": "Light",
+  "archetype": "Swiss & High-Contrast (Archetype 4)",
+  "vibe": "Industrial, utilitarian, highly legible under poor lighting, 'command-center' efficiency",
+  "colors": {
+    "background": "#FFFFFF",
+    "surface": "#F4F4F5",
+    "surface_dark": "#E4E4E7",
+    "primary": "#FF3B30",
+    "primary_hover": "#D32F2F",
+    "text_main": "#09090B",
+    "text_muted": "#52525B",
+    "border": "#09090B",
+    "success": "#10B981"
+  },
+  "typography": {
+    "heading_font": "Chivo, sans-serif",
+    "body_font": "IBM Plex Sans, sans-serif",
+    "mono_font": "JetBrains Mono, monospace (MANDATORY for weight numbers)",
+    "h1": "text-4xl tracking-tighter font-black text-[#09090B]",
+    "h2": "text-2xl tracking-tight font-bold text-[#09090B]",
+    "label": "text-xs tracking-[0.2em] uppercase font-bold text-[#52525B]",
+    "weight_display": "text-5xl font-black font-mono tracking-tighter text-[#09090B]"
+  },
+  "layout_spacing": {
+    "padding_screen": "p-6",
+    "padding_card": "p-6",
+    "gap_standard": "gap-4",
+    "gap_large": "gap-8"
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#FF3B30] text-white font-bold uppercase tracking-widest rounded-none p-6 active:opacity-80 justify-center items-center flex",
+      "secondary": "bg-[#F4F4F5] border-2 border-[#09090B] text-[#09090B] font-bold uppercase tracking-widest rounded-none p-6 justify-center items-center flex",
+      "delete": "bg-black text-white p-4 rounded-none font-bold active:opacity-80"
+    },
+    "cards": {
+      "metric_card": "bg-white border-2 border-[#09090B] p-6 rounded-none flex-1",
+      "metric_card_highlight": "bg-[#09090B] border-2 border-[#09090B] p-6 rounded-none flex-1 text-white"
+    },
+    "scanner_view": {
+      "container": "relative aspect-square w-full border-4 border-[#09090B] bg-black overflow-hidden",
+      "overlay": "absolute inset-0 flex items-center justify-center",
+      "target_box": "w-3/4 h-3/4 border-2 border-[#FF3B30] border-dashed"
+    }
+  },
+  "screens": {
+    "ScannerScreen": {
+      "layout": "Flex-col, gap-6 p-6",
+      "sections": [
+        "Header: App title ('WEIGHT SCANNER') and clear session button",
+        "Scanner: Camera view with bright targeting box",
+        "Live Totals: Grid containing Total Netto, Total Brutto, and Item Count metrics in monospaced fonts",
+        "Action: Large manual entry button or View History button at bottom"
+      ]
+    },
+    "HistoryScreen": {
+      "layout": "Flex-col flex-1",
+      "sections": [
+        "Header: Total summary ('SCANNED ITEMS')",
+        "List: Scrollable FlatList of items. Each row must display Netto/Brutto boldly.",
+        "Swipe/Button: Explicit delete action on each row (no hidden swipes, make it visible for gloved hands)."
+      ]
+    }
+  },
+  "accessibility_and_ux": {
+    "touch_targets": "Minimum 48px height, preferred 64px for primary actions to accommodate warehouse workers using gloves.",
+    "contrast": "Black on White or Black on Safety Orange. High contrast ratios mandatory (Neo-brutalist approach).",
+    "feedback": "Visual active states (opacity change) and Haptic feedback on successful scan and deletion.",
+    "empty_states": "Stark, text-driven. E.g., 'NO ITEMS SCANNED. AWAITING QR CODE.' in monospace."
+  },
+  "instructions_to_main_agent": [
+    "This is a React Native / Expo application. Apply these design rules using NativeWind (Tailwind for React Native) or standard StyleSheet objects.",
+    "The UI must feel industrial and 'Brutalist' (Archetype 4). Do not use soft rounded corners (use rounded-none). Elements should have strong solid borders.",
+    "Use a monospace font for all weight values and item counts so digits align perfectly vertically. Ensure unit 'g' is visibly smaller than the numbers.",
+    "Do not use generic 'card' layouts with soft shadows. Use harsh 2px borders.",
+    "Ensure all interactive elements have a `testID` attribute (e.g., testID='scan-history-button').",
+    "Ensure the layout is highly visible under poor warehouse lighting."
+  ]
+}
