@@ -13,8 +13,7 @@ import {
   Vibration,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useAudioPlayer } from "expo-audio";
-import { Ionicons } from "@expo/vector-icons";
+import { createAudioPlayer, AudioPlayer, setAudioModeAsync } from "expo-audio";
 
 import { parseQR } from "../src/utils/parseQR";
 import {
@@ -54,35 +53,66 @@ export default function ScannerScreen() {
   const [scans, setScans] = useState<ScanItem[]>([]);
   const [buffer, setBuffer] = useState("");
   const [status, setStatus] = useState<ScanState>("idle");
-  const [statusMsg, setStatusMsg] = useState("SCANNER READY — WAITING FOR DATA");
+  const [statusMsg, setStatusMsg] = useState(
+    "SCANNER READY — WAITING FOR DATA"
+  );
   const [manualOpen, setManualOpen] = useState(false);
   const [mName, setMName] = useState("");
   const [mNetto, setMNetto] = useState("");
   const [mBrutto, setMBrutto] = useState("");
   const inputRef = useRef<TextInput | null>(null);
   const statusTimer = useRef<any>(null);
+  const successPlayerRef = useRef<AudioPlayer | null>(null);
+  const errorPlayerRef = useRef<AudioPlayer | null>(null);
 
-  const successPlayer = useAudioPlayer(require("../assets/sounds/success.wav"));
-  const errorPlayer = useAudioPlayer(require("../assets/sounds/error.wav"));
-
+  // Load scans + initialize audio (best-effort, never throws to UI)
   useEffect(() => {
     loadScans().then(setScans);
+
+    (async () => {
+      try {
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          shouldPlayInBackground: false,
+        });
+      } catch {
+        /* ignore */
+      }
+      try {
+        successPlayerRef.current = createAudioPlayer(
+          require("../assets/sounds/success.wav")
+        );
+      } catch (e) {
+        console.warn("success audio init failed", e);
+      }
+      try {
+        errorPlayerRef.current = createAudioPlayer(
+          require("../assets/sounds/error.wav")
+        );
+      } catch (e) {
+        console.warn("error audio init failed", e);
+      }
+    })();
+
     return () => {
       if (statusTimer.current) clearTimeout(statusTimer.current);
+      try {
+        successPlayerRef.current?.remove();
+      } catch {}
+      try {
+        errorPlayerRef.current?.remove();
+      } catch {}
     };
   }, []);
 
-  const playSuccess = () => {
+  const safePlay = (p: AudioPlayer | null) => {
+    if (!p) return;
     try {
-      successPlayer.seekTo(0);
-      successPlayer.play();
-    } catch {}
-  };
-  const playError = () => {
-    try {
-      errorPlayer.seekTo(0);
-      errorPlayer.play();
-    } catch {}
+      p.seekTo(0);
+      p.play();
+    } catch {
+      /* ignore */
+    }
   };
 
   const flashStatus = (s: ScanState, msg: string) => {
@@ -100,11 +130,13 @@ export default function ScannerScreen() {
     if (!trimmed) return;
     const parsed = parseQR(trimmed);
     if (!parsed) {
-      playError();
+      safePlay(errorPlayerRef.current);
       Vibration.vibrate(300);
       flashStatus(
         "error",
-        `INVALID SCAN: "${trimmed.substring(0, 40)}${trimmed.length > 40 ? "..." : ""}"`
+        `INVALID SCAN: "${trimmed.substring(0, 40)}${
+          trimmed.length > 40 ? "..." : ""
+        }"`
       );
       return;
     }
@@ -115,7 +147,7 @@ export default function ScannerScreen() {
       brutto: parsed.brutto,
       scannedAt: Date.now(),
     };
-    playSuccess();
+    safePlay(successPlayerRef.current);
     Vibration.vibrate(50);
     const next = await addScan(item);
     setScans(next);
@@ -131,7 +163,6 @@ export default function ScannerScreen() {
     const val = buffer;
     setBuffer("");
     await processScan(val);
-    // Keep input focused for next scan
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
@@ -142,19 +173,21 @@ export default function ScannerScreen() {
       Alert.alert("INVALID INPUT", "Enter valid Netto and Brutto numbers.");
       return;
     }
+    const netto = Math.min(n, b);
+    const brutto = Math.max(n, b);
     const item: ScanItem = {
       id: `${Date.now()}-m${Math.random().toString(36).slice(2, 6)}`,
       name: mName.trim() || undefined,
-      netto: n,
-      brutto: b,
+      netto,
+      brutto,
       scannedAt: Date.now(),
     };
-    playSuccess();
+    safePlay(successPlayerRef.current);
     const next = await addScan(item);
     setScans(next);
     flashStatus(
       "ok",
-      `ADDED: ${item.name ?? "ITEM"} — N ${fmt(n)}g / B ${fmt(b)}g`
+      `ADDED: ${item.name ?? "ITEM"} — N ${fmt(netto)}g / B ${fmt(brutto)}g`
     );
     setMName("");
     setMNetto("");
@@ -235,7 +268,7 @@ export default function ScannerScreen() {
         style={styles.delBtn}
         testID={`delete-${index}`}
       >
-        <Ionicons name="close" size={20} color="#FFF" />
+        <Text style={styles.delBtnText}>×</Text>
       </Pressable>
     </View>
   );
@@ -262,11 +295,11 @@ export default function ScannerScreen() {
           onPress={handleClearAll}
           style={[styles.iconBtn, scans.length === 0 && styles.iconBtnDisabled]}
         >
-          <Ionicons name="trash-outline" size={22} color="#FFF" />
+          <Text style={styles.iconBtnText}>CLEAR</Text>
         </Pressable>
       </View>
 
-      {/* Status bar + hidden/visible scanner input */}
+      {/* Status bar */}
       <Pressable
         onPress={() => inputRef.current?.focus()}
         style={[styles.statusBar, { backgroundColor: statusStyle.bg }]}
@@ -275,7 +308,10 @@ export default function ScannerScreen() {
         <View
           style={[
             styles.statusDot,
-            { backgroundColor: statusStyle.dot, opacity: status === "idle" ? 0.5 : 1 },
+            {
+              backgroundColor: statusStyle.dot,
+              opacity: status === "idle" ? 0.5 : 1,
+            },
           ]}
         />
         <Text
@@ -286,7 +322,7 @@ export default function ScannerScreen() {
         </Text>
       </Pressable>
 
-      {/* The scanner target input — invisible but focused, receives Bluetooth HID input */}
+      {/* Hidden scanner input — auto-focused, captures Bluetooth HID input */}
       <TextInput
         ref={inputRef}
         testID="scanner-input"
@@ -334,7 +370,7 @@ export default function ScannerScreen() {
         </View>
         {scans.length === 0 ? (
           <View style={styles.empty} testID="empty-state">
-            <Ionicons name="scan-outline" size={48} color={COLORS.mute} />
+            <Text style={styles.emptyIcon}>▢</Text>
             <Text style={styles.emptyTitle}>NO ITEMS YET</Text>
             <Text style={styles.emptySub}>
               TRIGGER YOUR BLUETOOTH SCANNER TO ADD ITEMS
@@ -360,8 +396,7 @@ export default function ScannerScreen() {
           onPress={() => setManualOpen(true)}
           style={styles.primaryBtn}
         >
-          <Ionicons name="keypad-outline" size={18} color="#FFF" />
-          <Text style={styles.primaryBtnText}>MANUAL ENTRY</Text>
+          <Text style={styles.primaryBtnText}>+ MANUAL ENTRY</Text>
         </Pressable>
       </View>
 
@@ -392,8 +427,9 @@ export default function ScannerScreen() {
                   setTimeout(() => inputRef.current?.focus(), 100);
                 }}
                 testID="manual-close-btn"
+                hitSlop={12}
               >
-                <Ionicons name="close" size={26} color={COLORS.ink} />
+                <Text style={styles.modalClose}>×</Text>
               </Pressable>
             </View>
 
@@ -474,13 +510,19 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   iconBtn: {
-    width: 48,
-    height: 48,
+    paddingHorizontal: 14,
+    height: 44,
     backgroundColor: COLORS.ink,
     alignItems: "center",
     justifyContent: "center",
   },
   iconBtnDisabled: { opacity: 0.3 },
+  iconBtnText: {
+    color: "#FFF",
+    fontWeight: "900",
+    fontSize: 11,
+    letterSpacing: 2,
+  },
 
   statusBar: {
     marginHorizontal: 20,
@@ -662,6 +704,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  delBtnText: {
+    color: "#FFF",
+    fontSize: 26,
+    fontWeight: "900",
+    lineHeight: 28,
+  },
 
   empty: {
     flex: 1,
@@ -672,6 +720,11 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: COLORS.surface2,
     borderStyle: "dashed",
+  },
+  emptyIcon: {
+    fontSize: 56,
+    color: COLORS.mute,
+    marginBottom: 4,
   },
   emptyTitle: {
     fontSize: 14,
@@ -711,7 +764,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 
-  // Modal
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -736,6 +788,12 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: COLORS.ink,
     letterSpacing: -0.5,
+  },
+  modalClose: {
+    fontSize: 28,
+    fontWeight: "900",
+    color: COLORS.ink,
+    paddingHorizontal: 4,
   },
   inputLabel: {
     fontSize: 10,
