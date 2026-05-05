@@ -130,6 +130,31 @@ export function parseQR(raw: string): ParsedWeight | null {
     }
   }
 
+  // 2) Inventory short prefixes (e.g., "Ne:00008.18 Pa:00002.77 Br:00010.95")
+  // Common in jewelry / GS1-style QR codes. Values may be zero-padded.
+  // Brutto is computed as Netto + Packing if not explicitly given.
+  {
+    const invRe = /\b(ne|pa|br|brt|net|nt|gr)\s*[:=]\s*0*(\d+(?:[.,]\d+)?)/gi;
+    const inv: Record<string, number> = {};
+    let im: RegExpExecArray | null;
+    while ((im = invRe.exec(input)) !== null) {
+      const key = im[1].toLowerCase();
+      const v = toNum(im[2]);
+      if (v !== null) inv[key] = v;
+    }
+    const netto =
+      inv.ne ?? inv.net ?? inv.nt ?? null;
+    let brutto: number | null =
+      inv.br ?? inv.brt ?? inv.gr ?? null;
+    if (netto !== null && brutto === null && inv.pa !== undefined) {
+      // Compute brutto = netto + packing, rounded to avoid float-math noise
+      brutto = Math.round((netto + inv.pa) * 100) / 100;
+    }
+    if (netto !== null && brutto !== null) {
+      return { ...ensureOrder(netto, brutto), name: pickName(input) };
+    }
+  }
+
   // 2) Labelled key:value pairs
   const kvRegex =
     /(netto|net|brutto|brutt|bruto|gross|name|item)\s*[:=]\s*([^,;\n\t|]+)/gi;
