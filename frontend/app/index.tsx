@@ -57,6 +57,10 @@ export default function ScannerScreen() {
     "SCANNER READY — WAITING FOR DATA"
   );
   const [manualOpen, setManualOpen] = useState(false);
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [rawLog, setRawLog] = useState<
+    { id: string; raw: string; ok: boolean; t: number }[]
+  >([]);
   const [mName, setMName] = useState("");
   const [mNetto, setMNetto] = useState("");
   const [mBrutto, setMBrutto] = useState("");
@@ -129,6 +133,17 @@ export default function ScannerScreen() {
     const trimmed = raw.trim();
     if (!trimmed) return;
     const parsed = parseQR(trimmed);
+    // Always remember the last 20 raw scans so user can debug
+    setRawLog((prev) => {
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        raw: trimmed,
+        ok: parsed !== null,
+        t: Date.now(),
+      };
+      const next = [entry, ...prev];
+      return next.slice(0, 20);
+    });
     if (!parsed) {
       safePlay(errorPlayerRef.current);
       Vibration.vibrate(300);
@@ -136,7 +151,7 @@ export default function ScannerScreen() {
         "error",
         `INVALID SCAN: "${trimmed.substring(0, 40)}${
           trimmed.length > 40 ? "..." : ""
-        }"`
+        }" — TAP DIAG`
       );
       return;
     }
@@ -299,9 +314,12 @@ export default function ScannerScreen() {
         </Pressable>
       </View>
 
-      {/* Status bar */}
+      {/* Status bar — tap to open diagnostics */}
       <Pressable
-        onPress={() => inputRef.current?.focus()}
+        onPress={() => {
+          if (rawLog.length > 0) setDiagOpen(true);
+          else inputRef.current?.focus();
+        }}
         style={[styles.statusBar, { backgroundColor: statusStyle.bg }]}
         testID="status-bar"
       >
@@ -392,6 +410,18 @@ export default function ScannerScreen() {
       {/* Actions */}
       <View style={styles.actions}>
         <Pressable
+          testID="diag-btn"
+          onPress={() => setDiagOpen(true)}
+          style={styles.secondaryBtn}
+        >
+          <Text style={styles.secondaryBtnText}>DIAG</Text>
+          {rawLog.length > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{rawLog.length}</Text>
+            </View>
+          )}
+        </Pressable>
+        <Pressable
           testID="manual-add-btn"
           onPress={() => setManualOpen(true)}
           style={styles.primaryBtn}
@@ -479,6 +509,95 @@ export default function ScannerScreen() {
             </Pressable>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Diagnostic Modal */}
+      <Modal
+        visible={diagOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setDiagOpen(false)}
+      >
+        <View style={styles.modalRoot}>
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() => {
+              setDiagOpen(false);
+              setTimeout(() => inputRef.current?.focus(), 100);
+            }}
+          />
+          <View style={[styles.modalSheet, { maxHeight: "80%" }]} testID="diag-modal">
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>SCAN DIAGNOSTICS</Text>
+              <Pressable
+                onPress={() => {
+                  setDiagOpen(false);
+                  setTimeout(() => inputRef.current?.focus(), 100);
+                }}
+                testID="diag-close-btn"
+                hitSlop={12}
+              >
+                <Text style={styles.modalClose}>×</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.diagHint}>
+              Last {rawLog.length} raw scans. Long-press a row to view full text.
+              Share with support if a code can&apos;t be parsed.
+            </Text>
+            {rawLog.length === 0 ? (
+              <View style={{ paddingVertical: 24, alignItems: "center" }}>
+                <Text style={styles.emptySub}>NO SCANS YET</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={rawLog}
+                keyExtractor={(x) => x.id}
+                style={{ maxHeight: 420 }}
+                ItemSeparatorComponent={() => <View style={styles.sep} />}
+                renderItem={({ item }) => (
+                  <Pressable
+                    onLongPress={() =>
+                      Alert.alert("RAW SCAN DATA", item.raw, [
+                        { text: "OK" },
+                      ])
+                    }
+                    style={[
+                      styles.diagRow,
+                      {
+                        borderColor: item.ok ? COLORS.ok : COLORS.accent,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.diagBadge,
+                        { backgroundColor: item.ok ? COLORS.ok : COLORS.accent },
+                      ]}
+                    >
+                      <Text style={styles.diagBadgeText}>
+                        {item.ok ? "OK" : "FAIL"}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, paddingHorizontal: 10 }}>
+                      <Text style={styles.diagTime}>{fmtTime(item.t)}</Text>
+                      <Text style={styles.diagRaw} numberOfLines={3}>
+                        {item.raw}
+                      </Text>
+                    </View>
+                  </Pressable>
+                )}
+                testID="diag-list"
+              />
+            )}
+            <Pressable
+              onPress={() => setRawLog([])}
+              style={[styles.secondaryBtn, { marginTop: 12 }]}
+              testID="diag-clear-btn"
+            >
+              <Text style={styles.secondaryBtnText}>CLEAR LOG</Text>
+            </Pressable>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -763,6 +882,38 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     fontSize: 13,
   },
+  secondaryBtn: {
+    height: 56,
+    paddingHorizontal: 18,
+    backgroundColor: COLORS.bg,
+    borderWidth: 2,
+    borderColor: COLORS.ink,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+  secondaryBtnText: {
+    color: COLORS.ink,
+    fontWeight: "900",
+    letterSpacing: 2,
+    fontSize: 13,
+  },
+  badge: {
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 4,
+    backgroundColor: COLORS.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 4,
+  },
+  badgeText: {
+    color: "#FFF",
+    fontWeight: "900",
+    fontSize: 11,
+    fontFamily: monoFont,
+  },
 
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   modalBackdrop: {
@@ -814,4 +965,45 @@ const styles = StyleSheet.create({
   },
   rowGap: { flexDirection: "row", gap: 10 },
   col: { flex: 1 },
+
+  diagHint: {
+    fontSize: 11,
+    color: COLORS.mute,
+    fontWeight: "600",
+    marginTop: 4,
+    marginBottom: 10,
+    lineHeight: 16,
+  },
+  diagRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    borderWidth: 2,
+    minHeight: 56,
+  },
+  diagBadge: {
+    width: 56,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  diagBadgeText: {
+    color: "#FFF",
+    fontWeight: "900",
+    fontSize: 12,
+    letterSpacing: 1.2,
+  },
+  diagTime: {
+    fontSize: 10,
+    color: COLORS.mute,
+    fontWeight: "700",
+    fontFamily: monoFont,
+    marginTop: 6,
+    marginBottom: 2,
+  },
+  diagRaw: {
+    fontSize: 12,
+    color: COLORS.ink,
+    fontWeight: "700",
+    fontFamily: monoFont,
+    paddingBottom: 6,
+  },
 });
