@@ -134,7 +134,7 @@ export function parseQR(raw: string): ParsedWeight | null {
   // Common in jewelry / GS1-style QR codes. Values may be zero-padded.
   // Brutto is computed as Netto + Packing if not explicitly given.
   {
-    const invRe = /\b(ne|pa|br|brt|net|nt|gr)\s*[:=]\s*0*(\d+(?:[.,]\d+)?)/gi;
+const invRe = /\b(ne|pa|br|brt|net|nt)\s*[:=]\s*0*(\d+(?:[.,]\d+)?)/gi;
     const inv: Record<string, number> = {};
     let im: RegExpExecArray | null;
     while ((im = invRe.exec(input)) !== null) {
@@ -142,8 +142,8 @@ export function parseQR(raw: string): ParsedWeight | null {
       const v = toNum(im[2]);
       if (v !== null) inv[key] = v;
     }
-    const netto =
-      inv.ne ?? inv.net ?? inv.nt ?? null;
+let brutto: number | null =
+  inv.br ?? inv.brt ?? null;
     let brutto: number | null =
       inv.br ?? inv.brt ?? inv.gr ?? null;
     if (netto !== null && brutto === null && inv.pa !== undefined) {
