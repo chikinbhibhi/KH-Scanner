@@ -169,7 +169,22 @@ export function parseQR(raw: string): ParsedWeight | null {
     const name = kv.name ?? kv.item;
     if (n !== null && b !== null) {
       return { ...ensureOrder(n, b), name };
-    }
+const netto =
+  inv.ne ?? inv.net ?? inv.nt ?? null;
+const packaging =
+  inv.pa ?? null;
+let brutto: number | null =
+  inv.br ?? inv.brt ?? inv.gr ?? null;
+if (netto !== null && brutto === null && packaging !== null) {
+  brutto = Math.round((netto + packaging) * 100) / 100;
+}
+if (netto !== null && brutto !== null) {
+  return { 
+    ...ensureOrder(netto, brutto), 
+    packaging: packaging ?? undefined,   // ← keeps packaging info
+    name: pickName(input) 
+  };
+}    }
   }
 
   // 3) Free-text Netto / Bruto patterns
