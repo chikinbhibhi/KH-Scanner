@@ -69,7 +69,7 @@ const extractDecimalNumbers = (input: string): number[] => {
 const findTriple = (
   values: number[]
 ): { netto: number; brutto: number } | null => {
-  const EPS = 0.011;
+  const EPS = 0.02;
   let best: { diff: number; a: number; b: number; c: number } | null = null;
   for (let i = 0; i < values.length; i++) {
     for (let j = i + 1; j < values.length; j++) {
