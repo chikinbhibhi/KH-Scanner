@@ -138,11 +138,17 @@ export function parseQR(raw: string): ParsedWeight | null {
       if (v !== null) inv[key] = v;
     }
     const netto = inv.ne ?? inv.net ?? inv.nt ?? null;
-    let brutto: number | null = inv.br ?? inv.brt ?? null;
+    const explicitBrutto: number | null = inv.br ?? inv.brt ?? null;
+    let brutto: number | null = explicitBrutto;
     if (netto !== null && brutto === null && inv.pa !== undefined) {
+      // Type 2 QR: no Br: field, so calculate brutto = netto + packing
       brutto = Math.round((netto + inv.pa) * 100) / 100;
     }
     if (netto !== null && brutto !== null) {
+      if (explicitBrutto !== null) {
+        // Type 1 QR: Br: is explicit — trust Ne: and Br: as-is, no swap
+        return { netto, brutto, name: pickName(input) };
+      }
       return { ...ensureOrder(netto, brutto), name: pickName(input) };
     }
   }
